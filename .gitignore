@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data files
+*.dat
+*.csv
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Text files - but allow specific ones
+*.txt
+!A_BASE_LINE/실행방법.txt
+!B_DFGAT/실행방법.txt
+
+# Model files
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.model
+
+# Logs
+*.log
+logs/
+runs/
+
+# Results and outputs
+BestModel/
+results/
+output/
+outputs/
+
+# Raw data directories
+raw_data/
+*/raw_data/
+
+# Large dataset directories
+C_Dataset/
+데이터셋_전처리/*/raw_data/
+데이터셋_전처리/*/*.dat
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+
+# Configuration files with sensitive data
+config.yaml
+config.json
+secrets.json
+
+# Exclude large specific files
+genome-scores.csv
+ratings.csv
+tags.csv
+qualifying.txt
+combined_data*.txt

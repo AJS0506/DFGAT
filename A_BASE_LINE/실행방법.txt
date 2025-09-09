@@ -1,0 +1,45 @@
+################################################################################
+# Baseline 모델 학습 명령어
+################################################################################
+
+# 사용 가능한 옵션:
+# --gpu         : GPU ID (기본값: 3)
+# --dataset     : 데이터셋 인덱스 (기본값: 1)
+#                 0: gowalla, 1: movielens_small, 2: movielens_25M, 
+#                 3: netflixPrize, 4: filmtrust
+# --seed        : 랜덤 시드 (기본값: 1004)
+# --model       : 모델명 [GCN/GAT/SAGE/GINC] (기본값: GCN)
+# --emb-dim     : 임베딩 차원 (기본값: 128)
+# --first-dim   : 첫번째 레이어 차원 (기본값: 64)
+# --second-dim  : 두번째 레이어 차원 (기본값: 32)
+# --lr          : 학습률 (기본값: 0.001)
+# --early-stop  : Early stopping patience (기본값: 10)
+# --epochs      : 최대 에폭 수 (기본값: 200)
+
+################################################################################
+# 데이터셋 0: Gowalla
+################################################################################
+
+# 단일 GPU - 순차 실행
+python3 baseline_train.py --gpu 0 --dataset 0 --seed 1005 --model GCN
+python3 baseline_train.py --gpu 0 --dataset 0 --seed 1005 --model GAT
+python3 baseline_train.py --gpu 0 --dataset 0 --seed 1005 --model SAGE
+python3 baseline_train.py --gpu 0 --dataset 0 --seed 1005 --model GINC
+
+# 다중 GPU - 병렬 실행
+python3 baseline_train.py --gpu 0 --dataset 0 --seed 1004 --model GCN &
+python3 baseline_train.py --gpu 1 --dataset 0 --seed 1004 --model GAT &
+python3 baseline_train.py --gpu 2 --dataset 0 --seed 1004 --model SAGE &
+python3 baseline_train.py --gpu 3 --dataset 0 --seed 1004 --model GINC &
+
+# 전체 데이터셋 & 시드 순회 - 병렬 실행 (데이터셋 0~4, 시드 1004~1008)
+for dataset in 0 1 2 3 4; do
+    seed=$((1004 + dataset))  # 데이터셋 0->시드 1004, 데이터셋 1->시드 1005, ...
+    echo "=============== 데이터셋 $dataset, 시드 $seed 실행 중 ==============="
+    python3 baseline_train.py --gpu 0 --dataset $dataset --seed $seed --model GCN &
+    python3 baseline_train.py --gpu 1 --dataset $dataset --seed $seed --model GAT &
+    python3 baseline_train.py --gpu 2 --dataset $dataset --seed $seed --model SAGE &
+    python3 baseline_train.py --gpu 3 --dataset $dataset --seed $seed --model GINC &
+    wait  # 4개 모델 병렬 실행 완료 대기
+    echo "=============== 데이터셋 $dataset 완료 ==============="
+done

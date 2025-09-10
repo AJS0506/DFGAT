@@ -21,7 +21,7 @@ from Eval.tracker import TrainTracker
 
 # =================== argparse 설정 =============================
 parser = argparse.ArgumentParser(description="Optional arguments for training.")
-parser.add_argument("--gpu", type=int, default=3, help="GPU ID (e.g., 0)")
+parser.add_argument("--gpu", type=int, default=-1, help="GPU ID (e.g., 0, 1, 2, 3) or -1 for CPU")
 parser.add_argument("--dataset", type=int, default=1, help="Dataset index (0: gowalla, 1: movielens_small, 2: movielens_25M, 3: netflixPrize, 4: filmtrust)")
 parser.add_argument("--seed", type=int, default=1004, help="Random seed")
 parser.add_argument("--model", type=str, default="GCN", help="Model name (GCN/GAT/SAGE/GINC)")
@@ -69,7 +69,10 @@ num_type1_nodes, num_type2_nodes = gm.get_num_nodes()
 print("학습 그래프 -> ",graph)
 
 # ============= 학습 모델 초기화 및 GPU 설정 =============
-device = torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
+if GPU_ID == -1:
+    device = torch.device("cpu")
+else:
+    device = torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
 graph = graph.to(device)
 
 models = {
@@ -85,7 +88,10 @@ if SELECTED_MODEL not in models:
 
 model = models[SELECTED_MODEL]
 
-print(f">>> Using GPU: {GPU_ID}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}, Model: {SELECTED_MODEL}")
+if GPU_ID == -1:
+    print(f">>> Using CPU, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}, Model: {SELECTED_MODEL}")
+else:
+    print(f">>> Using GPU: {GPU_ID}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}, Model: {SELECTED_MODEL}")
 
 # ============= 옵티마이저 설정 =============
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
@@ -244,8 +250,8 @@ for e in range(epoch):
 model_class_name = model.__class__.__name__
 time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# 새로운 폴더 구조: BestModel/SEED/DATASET/
-folder_path = f"BestModel/{RANDOM_SEED}/{DATA_SET}"
+# 새로운 폴더 구조: BestModel/SEED/DATASET/MODEL/
+folder_path = f"BestModel/{RANDOM_SEED}/{DATA_SET}/{SELECTED_MODEL}_{time_stamp}"
 
 if not os.path.exists(folder_path):
     os.makedirs(folder_path)

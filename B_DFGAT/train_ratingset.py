@@ -1,3 +1,4 @@
+import argparse
 import torch
 import random
 import copy
@@ -18,6 +19,29 @@ from DataLoader.load_dataset import DataLoader
 from Eval.result import calcEvaluationScore
 from Eval.tracker import TrainTracker
 
+# =================== argparse 설정 =============================
+parser = argparse.ArgumentParser(description="Optional arguments for DFGAT training.")
+parser.add_argument("--gpu", type=int, default=-1, help="GPU ID (e.g., 0, 1, 2, 3) or -1 for CPU")
+parser.add_argument("--dataset", type=int, default=3, help="Dataset index (0: movielens_small, 1: movielens_25M, 2: netflixPrize, 3: filmtrust)")
+parser.add_argument("--seed", type=int, default=1008, help="Random seed")
+parser.add_argument("--emb-dim", type=int, default=128, help="Embedding dimension")
+parser.add_argument("--first-dim", type=int, default=64, help="First layer dimension")
+parser.add_argument("--second-dim", type=int, default=32, help="Second layer dimension")
+parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+parser.add_argument("--early-stop", type=int, default=10, help="Early stopping patience")
+parser.add_argument("--epochs", type=int, default=200, help="Maximum number of epochs")
+args = parser.parse_args()
+
+# 변수 할당
+GPU_ID = args.gpu
+DATASET_NUMBER = args.dataset
+RANDOM_SEED = args.seed
+embedding_dim = args.emb_dim
+first_layer_dim = args.first_dim
+second_layer_dim = args.second_dim
+LEARNING_RATE = args.lr
+STOP_CONDITION = args.early_stop
+epoch = args.epochs
 
 # ============= 시드 고정 =============
 def set_random_seed(seed):
@@ -29,12 +53,7 @@ def set_random_seed(seed):
     torch.backends.cudnn.deterministic = True   # 연산 재현성 보장
     torch.backends.cudnn.benchmark = False      # 입력 크기가 일정할 때 최적화 비활성화
 
-RANDOM_SEED = 1008
 set_random_seed(RANDOM_SEED)
-
-# 4대의 GPU머신에서 테스트했습니다.
-# 편의상 병렬 학습하기 위해 GPU설정 탭에서 f"cuda:{DATASET_NUMBER}" 로 GPU가 설정됩니다. 
-DATASET_NUMBER = 3
 
 # ============= 데이터셋 정의 =============
 dataset_list = ["movielens_small", "movielens_25M", "netflixPrize", "filmtrust"]
@@ -114,17 +133,20 @@ for uid, mid, ts, rating in train_set:
 
 
 # ============= 학습 모델 초기화 및 GPU 설정 =============
-device = torch.device(f"cuda:1" if torch.cuda.is_available() else "cpu")
+if GPU_ID == -1:
+    device = torch.device("cpu")
+else:
+    device = torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
 graph = graph.to(device)
-embedding_dim = 128
-first_layer_dim = 64
-second_layer_dim = 32
 
 model = DiffHeadGATRating(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, uid2ts, uid2dg, mid2dg, uid2rt, mid2rt, device).to(device)
 
+if GPU_ID == -1:
+    print(f">>> Using CPU, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
+else:
+    print(f">>> Using GPU: {GPU_ID}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
 
 # ============= 옵티마이저 설정 =============
-LEARNING_RATE = 1e-3
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
 
@@ -135,8 +157,6 @@ for uid, mid, _, _ in train_set + val_set + test_set:
 
 
 # ============= 에포크 및 배치사이즈 설정 =============
-epoch = 10**9
-best_batch_dict = {"gowalla": 126843, "movielens_25M": 497893}
 batch_size = len(train_set) // 30
 print(f"훈련 세트 개수 -> {len(train_set)}, batch_size -> {batch_size}")
 
@@ -148,7 +168,6 @@ val_loss_tracker = []
 
 # ============= Early Stopping 구현 =============
 early_stop_cnt = 0
-STOP_CONDITION = 10 # 얼마나 참을 것 인지!
 
 best_val_loss = float('inf')
 best_model_state = None
@@ -288,8 +307,8 @@ for e in range(epoch):
 model_class_name = model.__class__.__name__
 time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# 새로운 폴더 구조: BestModel/SEED/DATASET/
-folder_path = f"BestModel/{RANDOM_SEED}/{DATA_SET}"
+# 새로운 폴더 구조: BestModel/SEED/DATASET/MODEL_TIMESTAMP/
+folder_path = f"BestModel/{RANDOM_SEED}/{DATA_SET}/DFGAT_{time_stamp}"
 
 if not os.path.exists(folder_path):
     os.makedirs(folder_path)
@@ -306,8 +325,8 @@ config = {
     "first_layer_dim": first_layer_dim,
     "second_layer_dim": second_layer_dim,
     "timestamp": time_stamp,
-    "gpu_id": device.index if device.type == 'cuda' else None,
-    "dataset_number": DATASET_NUMBER
+    "gpu_id": GPU_ID,
+    "model_type": "DFGAT"
 }
 
 # config.json 저장

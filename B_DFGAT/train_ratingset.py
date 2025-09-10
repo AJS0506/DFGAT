@@ -195,9 +195,28 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay
 
 
 # ============= Hard Negative 샘플링을 위한 데이터셋 딕셔너리 =============
+# 전체 방문 기록 (fallback용)
 user_visited = defaultdict(set)
-for uid, mid, _, _ in train_set + val_set + test_set:
+for uid, mid, _, _ in train_set + val_set + test_set:  # train_set만 사용 (data leakage 방지)
     user_visited[uid].add(mid)
+
+# 1-2점 아이템 (Hard Negative용)
+user_neg_visited = defaultdict(set)
+for uid, mid, _, rt in train_set + val_set + test_set:
+    if rt <= 2:
+        user_neg_visited[uid].add(mid)
+
+
+# GPT
+seen_train = defaultdict(set)
+for u, i, _, _ in train_set:   # explicit이면 평점 무관히 '본 것'은 전부 제외하는 게 일반적
+    seen_train[u].add(i)
+
+seen_val = defaultdict(set)
+for u, i, _, _ in val_set:
+    seen_val[u].add(i)
+
+
 
 
 # ============= 에포크 및 배치사이즈 설정 =============
@@ -238,25 +257,38 @@ for e in range(epoch):
         end_idx = min(i + batch_size, num_samples)
         batch_data = train_set[i:end_idx]
 
-        pos_users = torch.LongTensor([row[0] for row in batch_data]).to(device)
-        pos_items = torch.LongTensor([row[1] for row in batch_data]).to(device)
+        # pos_users = torch.LongTensor([row[0] for row in batch_data]).to(device)
+        # pos_items = torch.LongTensor([row[1] for row in batch_data]).to(device)
+
+        pos_users = torch.LongTensor([row[0] for row in batch_data if row[3] >= 3]).to(device)
+        pos_items = torch.LongTensor([row[1] for row in batch_data if row[3] >= 3]).to(device)
+
+        if len(pos_users) == 0:
+            print('빈 배치가 있어 skip합니다.')
+            continue
 
         # GCN 호출
         h = model(graph)
         user_emb = h['user']
         item_emb = h['item']
 
-        # =========== Random Hard Negative Sampling ===========
+        # =========== Hard Negative Sampling (1-2점 우선) ===========
         neg_items_list = []
         pos_users_cpu = pos_users.cpu().tolist()  # 유저 ID를 CPU 리스트로 변환 (set/dict 접근 속도↑)
 
         for u in pos_users_cpu:
-            visited_set = user_visited[u] # 이 유저가 이미 본 아이템 집합
-            while True:
-                candidate = random.randint(0, num_type2_nodes - 1)
-                if candidate not in visited_set:
-                    neg_items_list.append(candidate)
-                    break
+            if user_neg_visited[u]:  # 해당 유저가 1-2점 준 아이템이 있으면
+                # Hard Negative: 실제로 낮게 평가한 아이템에서 샘플링
+                neg_item = random.choice(list(user_neg_visited[u]))
+                neg_items_list.append(neg_item)
+            else:
+                # 1-2점 아이템이 없으면 방문 안 한 아이템에서 랜덤 샘플링
+                visited_set = user_visited[u] if u in user_visited else set()
+                while True:
+                    candidate = random.randint(0, num_type2_nodes - 1)
+                    if candidate not in visited_set:
+                        neg_items_list.append(candidate)
+                        break
         
         neg_items = torch.tensor(neg_items_list, dtype=torch.long, device=device)
 
@@ -287,8 +319,11 @@ for e in range(epoch):
             end_idx = min(i + batch_size, val_samples)
             val_batch = val_set[i:end_idx]
 
-            pos_users = torch.LongTensor([row[0] for row in val_batch]).to(device)
-            pos_items = torch.LongTensor([row[1] for row in val_batch]).to(device)
+            pos_users = torch.LongTensor([row[0] for row in val_batch if row[3] >= 3]).to(device)
+            pos_items = torch.LongTensor([row[1] for row in val_batch if row[3] >= 3]).to(device)
+
+            if len(pos_users) == 0:
+                continue
 
             # 모델 순전파
             h = model(graph)
@@ -300,12 +335,18 @@ for e in range(epoch):
             pos_users_cpu = pos_users.cpu().tolist()
 
             for u in pos_users_cpu:
-                visited_set = user_visited[u]
-                while True:
-                    candidate = random.randint(0, num_type2_nodes - 1)
-                    if candidate not in visited_set:
-                        neg_items_list.append(candidate)
-                        break
+                if user_neg_visited[u]:  # 해당 유저가 1-2점 준 아이템이 있으면
+                    # Hard Negative: 실제로 낮게 평가한 아이템에서 샘플링
+                    neg_item = random.choice(list(user_neg_visited[u]))
+                    neg_items_list.append(neg_item)
+                else:
+                    # 1-2점 아이템이 없으면 방문 안 한 아이템에서 랜덤 샘플링
+                    visited_set = user_visited[u] if u in user_visited else set()
+                    while True:
+                        candidate = random.randint(0, num_type2_nodes - 1)
+                        if candidate not in visited_set:
+                            neg_items_list.append(candidate)
+                            break
 
             neg_items = torch.tensor(neg_items_list, dtype=torch.long, device=device)
 
@@ -396,7 +437,18 @@ with torch.no_grad():
 # tracker = TrainTracker(train_loss_tracker, val_loss_tracker, avg_recall, avg_precision, avg_ndcg, folder_path)
 # tracker.plot_results()
 
-test_processor = calcEvaluationScore(test_set, test_hidden, folder_path, DATA_SET)
+# test_processor = calcEvaluationScore(test_set, test_hidden, folder_path, DATA_SET)
+test_processor = calcEvaluationScore(
+    dataset=test_set,
+    hidden_state=test_hidden,
+    folder_path=folder_path,
+    dataset_name=DATA_SET,
+    seen_train=seen_train,
+    seen_val=seen_val,
+    pos_threshold=4.0,
+    exclude_seen_in_reco=True,
+)
+
 (macro_recall, macro_precision, macro_ndcg,
  micro_recall, micro_precision, micro_ndcg) = test_processor.calcScore()
 

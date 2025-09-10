@@ -1,13 +1,36 @@
+# eval_calc.py
 import torch, math, os
 from collections import defaultdict
 
 class calcEvaluationScore():
-    def __init__(self, dataset, hidden_state, folder_path, dataset_name):
+    """
+    평가 클래스(수정본)
+    - relevant(정답) 정의: 평점 >= pos_threshold (기본 4.0). implicit 데이터(gowalla)는 전부 정답.
+    - 추천 후보에서 train(+val)에서 이미 본 아이템은 제외(masking).
+    - Macro/Micro: Recall@K, Precision@K, NDCG@K 모두 계산.
+    """
+    def __init__(
+        self,
+        dataset,                      # 테스트셋 raw tuples
+        hidden_state,                 # {'user': UxD, 'item': IxD}
+        folder_path,                  # 결과 저장 폴더
+        dataset_name,                 # 데이터셋 이름(예: "filmtrust", "gowalla")
+        seen_train=None,              # {u: set(items)} - train에서 본 아이템
+        seen_val=None,                # {u: set(items)} - val에서 본 아이템
+        pos_threshold: float = 4.0,   # 평점 임계값(implicit이면 무시)
+        exclude_seen_in_reco: bool = True,  # 후보 마스킹 여부
+    ):
         self.dataset = dataset
         self.dataset_name = dataset_name
+        self.user_h = hidden_state['user']   # [num_users, dim]
+        self.movie_h = hidden_state['item']  # [num_items, dim]
 
-        self.user_h = hidden_state['user']
-        self.movie_h = hidden_state['item']
+        self.pos_threshold = pos_threshold
+        self.exclude_seen_in_reco = exclude_seen_in_reco
+
+        # 본 아이템(후보에서 제외할 집합)
+        self.seen_train = seen_train or defaultdict(set)
+        self.seen_val   = seen_val   or defaultdict(set)
 
         # 평가할 Top-K 리스트
         self.topk = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -25,108 +48,152 @@ class calcEvaluationScore():
         # 결과 저장 경로
         self.txt_file_path = os.path.join(folder_path, "eval.txt")
         with open(self.txt_file_path, 'w', encoding='utf-8') as f:
-            f.write("==== Model Evaluation Scores ===\n\n\n")  
+            f.write("==== Model Evaluation Scores ===\n\n\n")
+
+    def _build_user_truth(self):
+        """
+        사용자별 정답(테스트) 아이템 목록을 구성.
+        - explicit: 평점 >= pos_threshold만 정답으로 사용
+        - implicit(gowalla 등): 모두 정답으로 사용
+        - 중복 제거
+        """
+        test_set = defaultdict(list)
+
+        if self.dataset_name == "gowalla":  # implicit
+            for uid, mid, _ in self.dataset:
+                test_set[uid].append(mid)
+        else:  # explicit
+            th = float(self.pos_threshold)
+            for uid, mid, _, rt in self.dataset:
+                if float(rt) >= th:
+                    test_set[uid].append(mid)
+
+        # 중복 제거 및 빈 유저 제거
+        cleaned = {}
+        for u, items in test_set.items():
+            uniq = list(set(items))
+            if len(uniq) > 0:
+                cleaned[u] = uniq
+        return cleaned
+
+    @staticmethod
+    def _idcg_at_k(k: int) -> float:
+        """정규화 상수 IDCG@K (binary relevance)"""
+        idcg = 0.0
+        for rank in range(1, k + 1):
+            idcg += 1.0 / math.log2(rank + 1)
+        return idcg
 
     def calcScore(self):
         # --------------------------------------
-        # 1) 유저별 테스트 아이템 목록 만들기
+        # 1) 유저별 테스트 정답 목록 만들기 (임계값 반영)
         # --------------------------------------
-        test_set = defaultdict(list)
+        user_truth = self._build_user_truth()
+        num_items = self.movie_h.shape[0]
 
-        if self.dataset_name == "gowalla":
-            for uid, mid, _ in self.dataset:
-                test_set[uid].append(mid)
-        else:
-            for uid, mid, _, _ in self.dataset:
-                test_set[uid].append(mid)
+        # 미리 user-level IDCG 캐시(속도)
+        idcg_cache = {}
 
         # --------------------------------------
-        # 2) Top-K별로 반복하며 평가
+        # 2) Top-K별로 반복
         # --------------------------------------
         for topk in self.topk:
-            # (기존) Macro 평균을 위한 누적
+            # 매크로/마이크로 누적 변수
             macro_recall_sum = 0.0
             macro_precision_sum = 0.0
             macro_ndcg_sum = 0.0
+            macro_user_count = 0  # 정답 없는 유저는 스킵
 
-            # (추가) Micro-averaging을 위한 누적
-            total_intersect = 0  # 전체 유저가 맞춘 아이템(교집합) 수의 합
-            total_truth = 0      # 전체 유저 테스트 아이템(정답) 수의 합
-            total_predict = 0    # 전체 유저가 예측한 아이템(Top-K) 수의 합
+            total_intersect = 0   # Micro: 전체 맞춘 수
+            total_truth = 0       # Micro: 전체 정답 수
+            total_predict = 0     # Micro: 전체 예측 수(= sum of allowed_k per user)
             sum_DCG = 0.0
             sum_IDCG = 0.0
 
             # --------------------------------------
-            # 2-1) 모든 유저에 대해 반복 (UID 루프)
+            # 2-1) 모든 유저에 대해 반복
             # --------------------------------------
-            for user in test_set.keys():
-                test_mids = torch.LongTensor(test_set[user])
+            for user, truth_items in user_truth.items():
+                truth_set = set(truth_items)
+                num_truth = len(truth_set)
+                if num_truth == 0:
+                    continue  # 안전
 
-                # 유저 임베딩과 전체 아이템 임베딩 내적 → 상위 K개 인덱스
-                user_score = (self.user_h[user] * self.movie_h).sum(dim=1)
-                topk_values, topk_indices = torch.topk(user_score, topk, largest=True)
+                # 유저 점수 계산 (u·v)
+                user_vec = self.user_h[user]              # [D]
+                scores = (user_vec * self.movie_h).sum(dim=1)  # [I]
 
-                # (공통) 교집합
-                intersect = set(test_mids.tolist()) & set(topk_indices.tolist())
-                num_hit = len(intersect)        # 이 유저가 맞춘 아이템 수
-                num_truth = len(test_mids)      # 이 유저의 테스트 아이템 전체 개수
-                # 위에서 topk가 현재 K값 → 즉 이 유저가 예측한 아이템 개수 = topk
+                # 후보에서 train(+val)에서 본 아이템 제외
+                allowed_k = topk
+                if self.exclude_seen_in_reco:
+                    seen = (self.seen_train.get(user, set())
+                            | self.seen_val.get(user, set()))
+                    if seen:
+                        # 범위 내 인덱스만 취함(안전)
+                        seen_idx = [i for i in seen if 0 <= i < num_items]
+                        if len(seen_idx) > 0:
+                            idx = torch.tensor(seen_idx, dtype=torch.long, device=scores.device)
+                            scores.index_fill_(0, idx, float('-inf'))
+                        # 남은 후보 수 계산(음수 방지)
+                        candidate_cnt = max(0, num_items - len(seen_idx))
+                        allowed_k = min(topk, max(1, candidate_cnt))
+                    else:
+                        allowed_k = min(topk, num_items)
+                else:
+                    allowed_k = min(topk, num_items)
 
-                # ===== (A) Macro Recall@K, Precision@K =====
-                recall_k = num_hit / num_truth
-                precision_k = num_hit / topk
+                # 상위 K 추출
+                _, topk_indices = torch.topk(scores, allowed_k, largest=True)
+                topk_list = topk_indices.tolist()
 
-                # ===== (B) NDCG@K =====
+                # 교집합
+                intersect_count = len(truth_set.intersection(topk_list))
+
+                # ===== Macro Recall/Precision =====
+                recall_k = intersect_count / num_truth
+                precision_k = intersect_count / allowed_k
+
+                # ===== NDCG@K (binary relevance) =====
                 DCG = 0.0
-                for rank, item_idx in enumerate(topk_indices.tolist(), start=1):
-                    if item_idx in test_mids:
+                for rank, item_idx in enumerate(topk_list, start=1):
+                    if item_idx in truth_set:
                         DCG += 1.0 / math.log2(rank + 1)
-                max_rel = min(num_truth, topk)
-                IDCG = 0.0
-                for rank in range(1, max_rel + 1):
-                    IDCG += 1.0 / math.log2(rank + 1)
+
+                max_rel = min(num_truth, allowed_k)
+                if max_rel not in idcg_cache:
+                    idcg_cache[max_rel] = self._idcg_at_k(max_rel)
+                IDCG = idcg_cache[max_rel] if max_rel > 0 else 0.0
                 ndcg_k = (DCG / IDCG) if IDCG > 0 else 0.0
 
-                # ===== (C) Macro 누적 =====
+                # ===== Macro 누적 =====
                 macro_recall_sum += recall_k
                 macro_precision_sum += precision_k
                 macro_ndcg_sum += ndcg_k
+                macro_user_count += 1
 
-                # ===== (D) Micro 누적 =====
-                # - Recall: 전체 교집합 / 전체 정답
-                # - Precision: 전체 교집합 / 전체 예측
-                total_intersect += num_hit
+                # ===== Micro 누적 =====
+                total_intersect += intersect_count
                 total_truth += num_truth
-                total_predict += topk  # 모든 유저의 예측 아이템 수(=K)를 합산
-
+                total_predict += allowed_k
                 sum_DCG += DCG
                 sum_IDCG += IDCG
 
             # --------------------------------------
-            # 2-2) Macro 결과(기존 평균) 계산
+            # 2-2) Macro 결과 계산(정답 있는 유저만 평균)
             # --------------------------------------
-            num_users = len(test_set)
-            macro_recall = macro_recall_sum / num_users
-            macro_precision = macro_precision_sum / num_users
-            macro_ndcg = macro_ndcg_sum / num_users
+            if macro_user_count > 0:
+                macro_recall = macro_recall_sum / macro_user_count
+                macro_precision = macro_precision_sum / macro_user_count
+                macro_ndcg = macro_ndcg_sum / macro_user_count
+            else:
+                macro_recall = macro_precision = macro_ndcg = 0.0
 
             # --------------------------------------
-            # 2-3) Micro 결과(전체 관점) 계산
+            # 2-3) Micro 결과 계산
             # --------------------------------------
-            if total_truth > 0:
-                micro_recall = total_intersect / total_truth
-            else:
-                micro_recall = 0.0
-
-            if total_predict > 0:
-                micro_precision = total_intersect / total_predict
-            else:
-                micro_precision = 0.0
-
-            if sum_IDCG > 0:
-                micro_ndcg = sum_DCG / sum_IDCG
-            else:
-                micro_ndcg = 0.0
+            micro_recall = (total_intersect / total_truth) if total_truth > 0 else 0.0
+            micro_precision = (total_intersect / total_predict) if total_predict > 0 else 0.0
+            micro_ndcg = (sum_DCG / sum_IDCG) if sum_IDCG > 0 else 0.0
 
             # --------------------------------------
             # 2-4) 결과 저장
@@ -161,10 +228,10 @@ class calcEvaluationScore():
                 fp.write(f"NDCG:      {macro_ndcg:8.4f}       {micro_ndcg:8.4f}\n")
                 fp.write("=========================================\n\n")
 
-
-        # 3) 반환: (매크로, 마이크로) 모두 반환!
+        # 반환: (매크로, 마이크로) 모두 반환
         return (self.avg_recall, self.avg_precision, self.avg_ndcg,
                 self.micro_avg_recall, self.micro_avg_precision, self.micro_avg_ndcg)
+
 
 
 # import torch, math, os

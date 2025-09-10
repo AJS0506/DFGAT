@@ -55,13 +55,19 @@ def set_random_seed(seed):
 
 set_random_seed(RANDOM_SEED)
 
+
+
 # ============= 데이터셋 정의 =============
 dataset_list = ["movielens_small", "movielens_25M", "netflixPrize", "filmtrust"]
 DATA_SET = dataset_list[DATASET_NUMBER]
 
+
+
 # ============= 학습, 검증, 테스트 데이터셋 로드 =============
 loader = DataLoader(DATA_SET)
 train_set, val_set, test_set = loader.load_dataset()
+
+
 
 # 메모리 사용량 계산
 size_bytes = asizeof.asizeof(train_set)      # train_set과 모든 하위 객체 포함
@@ -70,6 +76,8 @@ size_mb    = size_bytes / (1024 ** 2)        # Byte → MB(2^20)
 print(f"train_set 메모리 사용량: {size_mb:.2f} MB ({size_bytes:,} bytes)")
 print("시드 -> ", RANDOM_SEED)
 print("데이터셋 -> ", DATA_SET)
+
+
 # ============= 데이터셋으로 그래프 만들기 =============
 gm = GraphMaker()
 graph = gm.get_graph(dataset=DATA_SET)
@@ -132,19 +140,55 @@ for uid, mid, ts, rating in train_set:
 
 
 
+# ============== Rating Edge Score 추가 ==============
+edge2rating = defaultdict(float)
+for uid, mid, ts, rating in train_set:
+    edge2rating[(uid, mid)] = float(rating) / 5.0  # 높은 평점에 큰 가중치
+    edge2rating[(mid, uid)] = float(rating) / 5.0  # 높은 평점에 큰 가중치
+    
+    # 역방향 가중치: 낮은 평점에 더 큰 가중치 (negative signal 강조)
+    # edge2rating[(uid, mid)] = (6.0 - float(rating)) / 5.0  # 1점→1.0, 5점→0.2
+    # edge2rating[(mid, uid)] = (6.0 - float(rating)) / 5.0  # 1점→1.0, 5점→0.2
+
+rt_weight_go, rt_weight_back = [], []
+
+go_src, go_dst = graph.edges(etype="go")
+back_src, back_dst = graph.edges(etype="back")
+
+for g_src, g_dst in zip(go_src.tolist(), go_dst.tolist()):
+    rt_weight_go.append(edge2rating[(g_src, g_dst)])
+
+for b_src, b_dst in zip(back_src.tolist(), back_dst.tolist()):
+    rt_weight_back.append(edge2rating[(b_src, b_dst)])
+
+rt_weight_go = torch.tensor(rt_weight_go, dtype=torch.float32)
+rt_weight_back = torch.tensor(rt_weight_back, dtype=torch.float32)
+
+
 # ============= 학습 모델 초기화 및 GPU 설정 =============
-if GPU_ID == -1:
-    device = torch.device("cpu")
-else:
-    device = torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu") if GPU_ID == -1 else torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
 graph = graph.to(device)
 
-model = DiffHeadGATRating(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, uid2ts, uid2dg, mid2dg, uid2rt, mid2rt, device).to(device)
+model = DiffHeadGATRating(
+    num_user_nodes=num_type1_nodes,
+    num_location_nodes=num_type2_nodes,
+    emb_dim=embedding_dim,
+    out1_dim=first_layer_dim,
+    out2_dim=second_layer_dim,
+    uid2ts=uid2ts,
+    uid2dg=uid2dg,
+    mid2dg=mid2dg,
+    uid2rt=uid2rt,
+    mid2rt=mid2rt,
+    device=device,
 
-if GPU_ID == -1:
-    print(f">>> Using CPU, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
-else:
-    print(f">>> Using GPU: {GPU_ID}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
+    # ==== 정보주입 CUSTOM 인자 ===
+    rt_weight_go = rt_weight_go,
+    rt_weight_back = rt_weight_back
+).to(device)
+
+print(f">>> Using {'CPU' if GPU_ID == -1 else f'GPU: {GPU_ID}'}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
+
 
 # ============= 옵티마이저 설정 =============
 optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)

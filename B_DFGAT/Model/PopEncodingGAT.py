@@ -108,7 +108,7 @@ class PopEncodingGATConv(GATConv):
         item_emb = self.item_linear(self.item_stats)
         
         # h_type1이 유저에 해당하는지 확인 (TimeEncodingGATConv와 유사)
-        if h_type1.shape[0] == self.num_users:
+        if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + user_emb
             h_type2 = h_type2 + item_emb
         else:

@@ -21,7 +21,6 @@ class DiffHeadGAT(nn.Module):
                  uid2dg : dict,
                  mid2dg : dict,
                  device : str,
-
                  allow_zero_in_degree = True,
                  feat_drop = 0.2,
                  attn_drop = 0.2,
@@ -252,6 +251,9 @@ class DiffHeadGATRating(nn.Module):
                  uid2rt : dict,
                  mid2rt : dict,
                  device : str,
+                 
+                 rt_weight_go: torch.Tensor,
+                 rt_weight_back: torch.Tensor,
 
                  allow_zero_in_degree = True,
                  feat_drop = 0.2,
@@ -261,7 +263,11 @@ class DiffHeadGATRating(nn.Module):
                  dropout=0.2):
         
         super(DiffHeadGATRating, self).__init__()
-        
+
+        # ============ Attention Score에 주입할 Rating 정보 ============
+        self.rt_weight_go = rt_weight_go.to(device)
+        self.rt_weight_back = rt_weight_back.to(device)
+
         # ============ 유저별 정규화된 타임스탬프 딕셔너리 ============
         self.uid2ts = uid2ts
         self.uid2dg = uid2dg
@@ -310,13 +316,17 @@ class DiffHeadGATRating(nn.Module):
                             feat_drop=feat_drop, attn_drop=attn_drop,
                             negative_slope=negative_slope, residual=residual,
                             num_users = self.num_user_nodes, num_items = self.num_location_nodes,
-                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device),
+                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device,
+                            # Rating 정보를 Attention Score에 주입
+                            rt_weight_go= self.rt_weight_go, rt_weight_back= self.rt_weight_back),
 
             'back': RatingEncodingGATConv(in_feats=emb_dim, out_feats=out1_dim, num_heads=1,
                             feat_drop=feat_drop, attn_drop=attn_drop,
                             negative_slope=negative_slope, residual=residual,
                             num_users = self.num_user_nodes, num_items = self.num_location_nodes,
-                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device)
+                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device,
+                            # Rating 정보를 Attention Score에 주입
+                            rt_weight_go= self.rt_weight_go, rt_weight_back= self.rt_weight_back)
         }, aggregate='mean')  
  
         
@@ -356,13 +366,17 @@ class DiffHeadGATRating(nn.Module):
                             feat_drop=feat_drop, attn_drop=attn_drop,
                             negative_slope=negative_slope, residual=residual,
                             num_users = self.num_user_nodes, num_items = self.num_location_nodes,
-                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device),
+                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device,
+                            # Rating 정보를 Attention Score에 주입
+                            rt_weight_go= self.rt_weight_go, rt_weight_back= self.rt_weight_back),
 
             'back': RatingEncodingGATConv(in_feats=out1_dim, out_feats=out2_dim, num_heads=1,
                             feat_drop=feat_drop, attn_drop=attn_drop,
                             negative_slope=negative_slope, residual=residual,
                             num_users = self.num_user_nodes, num_items = self.num_location_nodes,
-                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device)
+                            uid2rt = self.uid2rt, mid2rt = self.mid2rt, device = device,
+                            # Rating 정보를 Attention Score에 주입
+                            rt_weight_go= self.rt_weight_go, rt_weight_back= self.rt_weight_back)
         }, aggregate='mean')
 
         self.layer2_head3 = HeteroGraphConv({

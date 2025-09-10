@@ -70,7 +70,7 @@ class TimeEncodingGATConv(GATConv):
         
         ts_emb = self.ts_linear(self.user_ts_stats)
 
-        if h_type1.shape[0] == self.num_users:
+        if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + ts_emb
         else:
             h_type2 = h_type2 + ts_emb

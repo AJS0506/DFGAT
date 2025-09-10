@@ -18,6 +18,10 @@ class RatingEncodingGATConv(GATConv):
                  uid2rt: dict,  # 평점 정보 딕셔너리 
                  mid2rt: dict,  # 영화 평점 정보 딕셔너리
                  device: str,
+
+                 rt_weight_go: torch.Tensor,
+                 rt_weight_back: torch.Tensor,
+
                  activation=None,
                  allow_zero_in_degree: bool = False,
                  bias: bool = True):
@@ -35,6 +39,10 @@ class RatingEncodingGATConv(GATConv):
             bias=bias,
         )
 
+        # 레이팅 어텐션 스코어 정보 주입
+        self.rt_weight_go = rt_weight_go
+        self.rt_weight_back = rt_weight_back
+        
         # 인코딩 차원은, Feature에 더해줘야 하므로 맞춥니다
         self.encoding_dim = in_feats
 
@@ -66,11 +74,14 @@ class RatingEncodingGATConv(GATConv):
         h_type1, h_type2 = feat
         
         rt_emb = self.rt_linear(self.user_rt_stats)
+        edge_weight = None
 
-        if h_type1.shape[0] == self.num_users:
+        if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + rt_emb
+            edge_weight = self.rt_weight_go
         else:
             h_type2 = h_type2 + rt_emb
+            edge_weight = self.rt_weight_back
          
         # 새 tuple 로 묶어 넘기기
-        return super().forward(graph, (h_type1, h_type2), *args, **kwargs)
+        return super().forward(graph, (h_type1, h_type2), edge_weight = edge_weight, *args, **kwargs)

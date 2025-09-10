@@ -1,0 +1,22 @@
+이종 그래프 형태로 표현.
+
+# 여기서 src는 0번 ~ N번, dst는 0번 ~ M번
+-> 중간에 빈 값이 없는 순차적인 값으로 전처리!
+
+edges = [type1 src, type2 dst, timestamp, ... 데이터셋에 맞는 추가 컬럼]
+Gowalla의 경우 동종 노드 엣지도 존재하므로 추가 파일 존재 -> 따로 처리
+
+
+## DAT 파일 형식
+구분자: ::
+
+FilmTrust -> uid::mid::timestamp::rating
+Gowalla -> uid::lid::timestamp (rating 없음)
+         -> gowalla_homoedge.dat는 src::dst 형태
+MovieLens -> uid::mid::timestamp::rating  
+Netflix -> uid::mid::timestamp::rating
+
+train/val/test 분할 -> 60:20:20 (시간순)
+5개 이하 interaction 유저 제거됨
+
+PKL vs DAT 검증 완료 -> 데이터 100% 동일

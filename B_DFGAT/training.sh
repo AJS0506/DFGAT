@@ -10,3 +10,5 @@ python3 train_ratingset.py --seed 1005 --dataset 3 --gpu 1 &
 python3 train_ratingset.py --seed 1006 --dataset 3 --gpu 2 &
 python3 train_ratingset.py --seed 1007 --dataset 3 --gpu 3 &
 python3 train_ratingset.py --seed 1008 --dataset 3 --gpu -1 &
+
+# pkill -f train_ratingset.py

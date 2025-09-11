@@ -160,6 +160,17 @@ class calcEvaluationScore():
                 fp.write(f"Precision: {macro_precision:8.4f}       {micro_precision:8.4f}\n")
                 fp.write(f"NDCG:      {macro_ndcg:8.4f}       {micro_ndcg:8.4f}\n")
                 fp.write("=========================================\n\n")
+                
+                # JSON 형식으로 파싱하기 쉽게 추가
+                fp.write(f"# PARSEABLE_DATA_START_{topk}\n")
+                fp.write(f"topk={topk}\n")
+                fp.write(f"macro_recall={macro_recall:.6f}\n")
+                fp.write(f"macro_precision={macro_precision:.6f}\n")
+                fp.write(f"macro_ndcg={macro_ndcg:.6f}\n")
+                fp.write(f"micro_recall={micro_recall:.6f}\n")
+                fp.write(f"micro_precision={micro_precision:.6f}\n")
+                fp.write(f"micro_ndcg={micro_ndcg:.6f}\n")
+                fp.write(f"# PARSEABLE_DATA_END_{topk}\n\n")
 
 
         # 3) 반환: (매크로, 마이크로) 모두 반환!

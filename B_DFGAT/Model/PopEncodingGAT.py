@@ -19,6 +19,10 @@ class PopEncodingGATConv(GATConv):
                  uid2dg: dict,
                  mid2dg: dict,
                  device: str,
+
+                 pop_weight_go: torch.Tensor,
+                 pop_weight_back: torch.Tensor,
+
                  activation=None,
                  allow_zero_in_degree: bool = False,
                  bias: bool = True):
@@ -36,6 +40,11 @@ class PopEncodingGATConv(GATConv):
             bias=bias,
         )
         
+
+        # Attention SCore에 추가로 주입할 변수들
+        self.pop_weight_go = pop_weight_go
+        self.pop_weight_back = pop_weight_back
+
         # 인코딩 더할 특징 차원 (TimeEncoding과 동일하게 입력 차원과 동일)
         self.encoding_dim = in_feats
 
@@ -102,7 +111,8 @@ class PopEncodingGATConv(GATConv):
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
-        
+        edge_weight = None
+
         # 인기도 임베딩 얻기
         user_emb = self.user_linear(self.user_stats)
         item_emb = self.item_linear(self.item_stats)
@@ -111,9 +121,11 @@ class PopEncodingGATConv(GATConv):
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + user_emb
             h_type2 = h_type2 + item_emb
+            edge_weight = self.pop_weight_go
         else:
             h_type1 = h_type1 + item_emb
             h_type2 = h_type2 + user_emb
+            edge_weight = self.pop_weight_back
          
         # 업데이트된 특성으로 전달
-        return super().forward(graph, (h_type1, h_type2), *args, **kwargs)
+        return super().forward(graph, (h_type1, h_type2), edge_weight = edge_weight, *args, **kwargs)

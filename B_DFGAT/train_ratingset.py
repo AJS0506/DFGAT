@@ -6,6 +6,7 @@ import sys
 import os
 import datetime
 import json
+import math
 
 from collections import defaultdict
 from pympler import asizeof
@@ -50,11 +51,10 @@ def set_random_seed(seed):
     torch.manual_seed(seed)          # PyTorch CPU 시드
     torch.cuda.manual_seed(seed)     # PyTorch GPU 시드 (Single GPU)
     torch.cuda.manual_seed_all(seed) # Multi-GPU도 쓰는 경우
-    torch.backends.cudnn.deterministic = True   # 연산 재현성 보장
-    torch.backends.cudnn.benchmark = False      # 입력 크기가 일정할 때 최적화 비활성화
+    # torch.backends.cudnn.deterministic = True   # 연산 재현성 보장
+    # torch.backends.cudnn.benchmark = False      # 입력 크기가 일정할 때 최적화 비활성화
 
 set_random_seed(RANDOM_SEED)
-
 
 
 # ============= 데이터셋 정의 =============
@@ -140,6 +140,11 @@ for uid, mid, ts, rating in train_set:
 
 
 
+# ============== Edge Score 추가를 위한 엣지 정보 ==============
+go_src, go_dst = graph.edges(etype="go")
+back_src, back_dst = graph.edges(etype="back")
+
+
 # ============== Rating Edge Score 추가 ==============
 edge2rating = defaultdict(float)
 for uid, mid, ts, rating in train_set:
@@ -152,9 +157,6 @@ for uid, mid, ts, rating in train_set:
 
 rt_weight_go, rt_weight_back = [], []
 
-go_src, go_dst = graph.edges(etype="go")
-back_src, back_dst = graph.edges(etype="back")
-
 for g_src, g_dst in zip(go_src.tolist(), go_dst.tolist()):
     rt_weight_go.append(edge2rating[(g_src, g_dst)])
 
@@ -163,6 +165,49 @@ for b_src, b_dst in zip(back_src.tolist(), back_dst.tolist()):
 
 rt_weight_go = torch.tensor(rt_weight_go, dtype=torch.float32)
 rt_weight_back = torch.tensor(rt_weight_back, dtype=torch.float32)
+# ============== Rating Edge Score 추가 끝 ==============
+
+
+
+
+# ============== PoP Edge Score 추가 ==============
+# 유저와 아이템 둘 다의 인기도를 고려
+
+pop_weight_go, pop_weight_back = [], []
+edge2pop = defaultdict(float)
+
+max_user_degree = max(uid2dg.values()) if uid2dg else 1
+max_item_degree = max(mid2dg.values()) if mid2dg else 1
+
+for uid, mid, ts, rating in train_set:
+    # 로그 스케일링으로 극단값 차이 줄이기
+    user_pop = math.log(1 + uid2dg[uid]) / math.log(1 + max_user_degree)
+    item_pop = math.log(1 + mid2dg[mid]) / math.log(1 + max_item_degree)
+
+    # 기하평균 사용
+    edge2pop[(uid, mid)] = math.sqrt(user_pop * item_pop)
+    edge2pop[(mid, uid)] = math.sqrt(user_pop * item_pop)
+
+for g_src, g_dst in zip(go_src.tolist(), go_dst.tolist()):
+    pop_weight_go.append(edge2pop[(g_src, g_dst)])
+
+for b_src, b_dst in zip(back_src.tolist(), back_dst.tolist()):
+    pop_weight_back.append(edge2pop[(b_src, b_dst)])
+
+pop_weight_go = torch.tensor(pop_weight_go, dtype=torch.float32)
+pop_weight_back = torch.tensor(pop_weight_back, dtype=torch.float32)
+
+print(f"\nPop Edge Score 통계:")
+print(f"  pop_weight_go  : min={pop_weight_go.min():.4f}, max={pop_weight_go.max():.4f}, mean={pop_weight_go.mean():.4f}, std={pop_weight_go.std():.4f}")
+print(f"  pop_weight_back: min={pop_weight_back.min():.4f}, max={pop_weight_back.max():.4f}, mean={pop_weight_back.mean():.4f}, std={pop_weight_back.std():.4f}")
+print(f"  엣지 개수  : go={len(pop_weight_go)}, back={len(pop_weight_back)}")
+
+assert pop_weight_go.min() >= 0 and pop_weight_go.max() <= 1
+assert pop_weight_back.min() >= 0 and pop_weight_back.max() <= 1
+# ============== PoP Edge Score 추가 끝 ==============
+
+
+
 
 
 # ============= 학습 모델 초기화 및 GPU 설정 =============
@@ -170,11 +215,14 @@ device = torch.device("cpu") if GPU_ID == -1 else torch.device(f"cuda:{GPU_ID}" 
 graph = graph.to(device)
 
 model = DiffHeadGATRating(
+
     num_user_nodes=num_type1_nodes,
     num_location_nodes=num_type2_nodes,
+
     emb_dim=embedding_dim,
     out1_dim=first_layer_dim,
     out2_dim=second_layer_dim,
+
     uid2ts=uid2ts,
     uid2dg=uid2dg,
     mid2dg=mid2dg,
@@ -182,9 +230,14 @@ model = DiffHeadGATRating(
     mid2rt=mid2rt,
     device=device,
 
-    # ==== 정보주입 CUSTOM 인자 ===
+    # ==== 정보주입 CUSTOM 인자 (RatingConv) ===
     rt_weight_go = rt_weight_go,
-    rt_weight_back = rt_weight_back
+    rt_weight_back = rt_weight_back,
+
+    # ==== 정보주입 CUSTOM 인자 (PoPConv)  ===
+    pop_weight_go = pop_weight_go,
+    pop_weight_back = pop_weight_back
+
 ).to(device)
 
 print(f">>> Using {'CPU' if GPU_ID == -1 else f'GPU: {GPU_ID}'}, Dataset: {DATASET_NUMBER}, Seed: {RANDOM_SEED}")
@@ -389,12 +442,6 @@ if best_model_state is not None:
 model.eval()
 with torch.no_grad():
     test_hidden = model(graph)
-
-# test_processor = calcEvaluationScore(test_set, test_hidden, folder_path)
-# avg_recall, avg_precision, avg_ndcg = test_processor.calcScore()
-
-# tracker = TrainTracker(train_loss_tracker, val_loss_tracker, avg_recall, avg_precision, avg_ndcg, folder_path)
-# tracker.plot_results()
 
 test_processor = calcEvaluationScore(test_set, test_hidden, folder_path, DATA_SET)
 (macro_recall, macro_precision, macro_ndcg,

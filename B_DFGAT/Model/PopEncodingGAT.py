@@ -111,6 +111,7 @@ class PopEncodingGATConv(GATConv):
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
+        my_src, my_dst = None, None
         edge_weight = None
 
         # 인기도 임베딩 얻기
@@ -121,11 +122,27 @@ class PopEncodingGATConv(GATConv):
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + user_emb
             h_type2 = h_type2 + item_emb
+
+            my_src = user_emb
+            my_dst = item_emb
+
             edge_weight = self.pop_weight_go
         else:
             h_type1 = h_type1 + item_emb
             h_type2 = h_type2 + user_emb
+
+            my_src = item_emb
+            my_dst = user_emb
+
             edge_weight = self.pop_weight_back
          
         # 업데이트된 특성으로 전달
-        return super().forward(graph, (h_type1, h_type2), edge_weight = edge_weight, *args, **kwargs)
+        return super().forward(
+            graph,
+            (h_type1, h_type2),
+            edge_weight = edge_weight, 
+            my_src=my_src, 
+            my_dst=my_dst, 
+            *args, 
+            **kwargs
+        )

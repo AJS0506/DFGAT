@@ -72,16 +72,33 @@ class RatingEncodingGATConv(GATConv):
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
-        
-        rt_emb = self.rt_linear(self.user_rt_stats)
+        my_src, my_dst = None, None
         edge_weight = None
+
+        rt_emb = self.rt_linear(self.user_rt_stats)
 
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + rt_emb
+
+            my_src = rt_emb
+
             edge_weight = self.rt_weight_go
+
         else:
             h_type2 = h_type2 + rt_emb
+
+            my_dst = rt_emb
+
             edge_weight = self.rt_weight_back
          
+
         # 새 tuple 로 묶어 넘기기
-        return super().forward(graph, (h_type1, h_type2), edge_weight = edge_weight, *args, **kwargs)
+        return super().forward(
+            graph, 
+            (h_type1, h_type2), 
+            edge_weight = edge_weight, 
+            my_src=my_src, 
+            my_dst=my_dst, 
+            *args, 
+            **kwargs
+        )

@@ -47,6 +47,7 @@ class PopEncodingGATConv(GATConv):
 
         # 인코딩 더할 특징 차원 (TimeEncoding과 동일하게 입력 차원과 동일)
         self.encoding_dim = in_feats
+        self.out_feats = out_feats
 
         # 유저 수 및 아이템 수
         self.num_users = num_users
@@ -107,42 +108,44 @@ class PopEncodingGATConv(GATConv):
         # 유저별 4개의 특징 -> 유저 히든 피쳐의 개수로 확장하는 선형 레이어
         self.user_linear = nn.Linear(4, self.encoding_dim)
         self.item_linear = nn.Linear(4, self.encoding_dim)
-         
+        self.res = nn.Linear(4, self.out_feats)
+
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
-        my_src, my_dst = None, None
+        # my_res = None  # destination 노드의 residual 정보
         edge_weight = None
 
         # 인기도 임베딩 얻기
         user_emb = self.user_linear(self.user_stats)
         item_emb = self.item_linear(self.item_stats)
-        
+
         # h_type1이 유저에 해당하는지 확인 (TimeEncodingGATConv와 유사)
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
+            # go: User -> Item (Item이 destination)
             h_type1 = h_type1 + user_emb
             h_type2 = h_type2 + item_emb
 
-            my_src = user_emb
-            my_dst = item_emb
+            # my_res = item_emb  # destination(Item)의 임베딩
+            my_res = self.res(self.item_stats)
 
             edge_weight = self.pop_weight_go
         else:
+            # back: Item -> User (User가 destination)
             h_type1 = h_type1 + item_emb
             h_type2 = h_type2 + user_emb
 
-            my_src = item_emb
-            my_dst = user_emb
+            # my_res = user_emb  # destination(User)의 임베딩
+            my_res = self.res(self.user_stats)
 
             edge_weight = self.pop_weight_back
-         
+
         # 업데이트된 특성으로 전달
         return super().forward(
             graph,
             (h_type1, h_type2),
-            edge_weight = edge_weight, 
-            my_src=my_src, 
-            my_dst=my_dst, 
-            *args, 
+            edge_weight = edge_weight,
+            my_res=my_res,  # 수정: my_src/my_dst 대신 my_res 사용
+            *args,
             **kwargs
         )

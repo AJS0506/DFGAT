@@ -45,7 +45,7 @@ class RatingEncodingGATConv(GATConv):
         
         # 인코딩 차원은, Feature에 더해줘야 하므로 맞춥니다
         self.encoding_dim = in_feats
-
+        self.out_feats = out_feats
         # 유저 수 및 영화 수
         self.num_users = num_users
         self.num_items = num_items
@@ -68,37 +68,45 @@ class RatingEncodingGATConv(GATConv):
 
         self.register_buffer('user_rt_stats', stats)
         self.rt_linear = nn.Linear(2, self.encoding_dim)
-         
+
+        # 3) ResNet을 위한 선형 계층 추가
+        self.res = nn.Linear(2, self.out_feats)
+
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
-        my_src, my_dst = None, None
+
+        my_res = None  # destination 노드의 residual 정보
         edge_weight = None
 
         rt_emb = self.rt_linear(self.user_rt_stats)
 
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
+            # go: User -> Item (Item이 destination)
             h_type1 = h_type1 + rt_emb
 
-            my_src = rt_emb
+            # 주의: RatingEncoding은 User의 rating 정보만 있으므로
+            # Item이 destination일 때는 my_res = None
+            my_res = None
 
             edge_weight = self.rt_weight_go
 
         else:
+            # back: Item -> User (User가 destination)
             h_type2 = h_type2 + rt_emb
 
-            my_dst = rt_emb
+            # User가 destination일 때 rating 정보 추가
+            my_res = self.res(self.user_rt_stats)
 
             edge_weight = self.rt_weight_back
-         
+
 
         # 새 tuple 로 묶어 넘기기
         return super().forward(
-            graph, 
-            (h_type1, h_type2), 
-            edge_weight = edge_weight, 
-            my_src=my_src, 
-            my_dst=my_dst, 
-            *args, 
+            graph,
+            (h_type1, h_type2),
+            edge_weight = edge_weight,
+            my_res=my_res,  # 수정: my_src/my_dst 대신 my_res 사용
+            *args,
             **kwargs
         )

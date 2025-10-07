@@ -12,7 +12,7 @@ from collections import defaultdict
 from pympler import asizeof
 
 # ============= 모델 임포트 =============
-from Model.MyGAT import DiffHeadGATRating
+from Model.MyGAT import DiffHeadGAT
 
 from GraphMaker.make_graph import GraphMaker
 from DataLoader.load_dataset import DataLoader
@@ -23,8 +23,8 @@ from Eval.tracker import TrainTracker
 # =================== argparse 설정 =============================
 parser = argparse.ArgumentParser(description="Optional arguments for DFGAT training.")
 parser.add_argument("--gpu", type=int, default=-1, help="GPU ID (e.g., 0, 1, 2, 3) or -1 for CPU")
-parser.add_argument("--dataset", type=int, default=3, help="Dataset index (0: movielens_small, 1: movielens_25M, 2: netflixPrize, 3: filmtrust)")
-parser.add_argument("--seed", type=int, default=1008, help="Random seed")
+parser.add_argument("--dataset", type=int, default=0, help="Dataset index (0: movielens_small, 1: movielens_25M, 2: netflixPrize")
+parser.add_argument("--seed", type=int, default=1004, help="Random seed")
 parser.add_argument("--emb-dim", type=int, default=128, help="Embedding dimension")
 parser.add_argument("--first-dim", type=int, default=64, help="First layer dimension")
 parser.add_argument("--second-dim", type=int, default=32, help="Second layer dimension")
@@ -58,7 +58,7 @@ set_random_seed(RANDOM_SEED)
 
 
 # ============= 데이터셋 정의 =============
-dataset_list = ["movielens_small", "movielens_25M", "netflixPrize", "filmtrust"]
+dataset_list = ["movielens_small", "movielens_25M", "netflixPrize","filmtrust"]
 DATA_SET = dataset_list[DATASET_NUMBER]
 
 
@@ -66,6 +66,10 @@ DATA_SET = dataset_list[DATASET_NUMBER]
 # ============= 학습, 검증, 테스트 데이터셋 로드 =============
 loader = DataLoader(DATA_SET)
 train_set, val_set, test_set = loader.load_dataset()
+
+# ============= Time Edge Score 계산을 위한 원본 timestamp 저장 =============
+# Z-정규화 전에 원본 timestamp를 저장해두기
+train_set_original = copy.deepcopy(train_set)
 
 
 
@@ -180,11 +184,11 @@ max_user_degree = max(uid2dg.values()) if uid2dg else 1
 max_item_degree = max(mid2dg.values()) if mid2dg else 1
 
 for uid, mid, ts, rating in train_set:
-    # 로그 스케일링으로 극단값 차이 줄이기
+    # 차수는 로그 사용해서 스케일링하기 
     user_pop = math.log(1 + uid2dg[uid]) / math.log(1 + max_user_degree)
     item_pop = math.log(1 + mid2dg[mid]) / math.log(1 + max_item_degree)
 
-    # 기하평균 사용
+    # 전체로 나누면 평균이 너무 작아서 기하평균 사용함!
     edge2pop[(uid, mid)] = math.sqrt(user_pop * item_pop)
     edge2pop[(mid, uid)] = math.sqrt(user_pop * item_pop)
 
@@ -197,14 +201,74 @@ for b_src, b_dst in zip(back_src.tolist(), back_dst.tolist()):
 pop_weight_go = torch.tensor(pop_weight_go, dtype=torch.float32)
 pop_weight_back = torch.tensor(pop_weight_back, dtype=torch.float32)
 
-print(f"\nPop Edge Score 통계:")
-print(f"  pop_weight_go  : min={pop_weight_go.min():.4f}, max={pop_weight_go.max():.4f}, mean={pop_weight_go.mean():.4f}, std={pop_weight_go.std():.4f}")
-print(f"  pop_weight_back: min={pop_weight_back.min():.4f}, max={pop_weight_back.max():.4f}, mean={pop_weight_back.mean():.4f}, std={pop_weight_back.std():.4f}")
-print(f"  엣지 개수  : go={len(pop_weight_go)}, back={len(pop_weight_back)}")
+# print(f"\nPop Edge Score 통계:")
+# print(f"  pop_weight_go  : min={pop_weight_go.min():.4f}, max={pop_weight_go.max():.4f}, mean={pop_weight_go.mean():.4f}, std={pop_weight_go.std():.4f}")
+# print(f"  pop_weight_back: min={pop_weight_back.min():.4f}, max={pop_weight_back.max():.4f}, mean={pop_weight_back.mean():.4f}, std={pop_weight_back.std():.4f}")
+# print(f"  엣지 개수  : go={len(pop_weight_go)}, back={len(pop_weight_back)}")
 
 assert pop_weight_go.min() >= 0 and pop_weight_go.max() <= 1
 assert pop_weight_back.min() >= 0 and pop_weight_back.max() <= 1
 # ============== PoP Edge Score 추가 끝 ==============
+
+
+
+
+# ============== Time Edge Score 추가 (원본 timestamp 사용) ================
+# 지수 감쇠 함수: 반감기를 이용한 시간 가중치
+# score = exp(-λ * elapsed_time)
+# 반감기에서 0.5가 되도록: 0.5 = exp(-λ * half_life)
+# λ = ln(2) / half_life
+
+# 1) 원본 timestamp로 범위 찾기 (정규화 전 값 사용)
+all_timestamps_original = [float(ts) for _, _, ts, _ in train_set_original]
+min_ts_original = min(all_timestamps_original)
+max_ts_original = max(all_timestamps_original)
+time_range = max_ts_original - min_ts_original
+
+print(f"\nTime Edge Score 계산 중... (원본 timestamp 사용)")
+print(f"  타임스탬프 범위: {min_ts_original:.0f} ~ {max_ts_original:.0f}")
+print(f"  전체 기간: {time_range:.0f} 초 = {time_range/86400:.1f} 일")
+
+# 2) 반감기 설정 (전체 기간의 절반)
+half_life = time_range / 2 if time_range > 0 else 1  # 초 단위
+lambda_decay = math.log(2) / half_life if half_life > 0 else 1e-8  # 감쇠 상수
+
+print(f"  반감기: {half_life:.0f} 초 = {half_life/86400:.1f} 일")
+print(f"  감쇠 상수 λ: {lambda_decay:.2e}")
+
+# 3) 각 엣지의 time score 계산 (원본 timestamp 사용)
+time_weight_go = []
+time_weight_back = []
+
+# train_set_original을 사용하여 원본 timestamp로 계산
+for uid, lid, ts, rating in train_set_original:
+    # elapsed_time: 최신 시점(max_ts)로부터 경과한 시간 (초 단위)
+    elapsed_time = max_ts_original - float(ts)
+
+    # 지수 감쇠 함수 적용
+    # score: 1(최신) ~ 0에 가까운 값(오래됨), 반감기에서 0.5
+    time_score = math.exp(-lambda_decay * elapsed_time)
+
+    time_weight_go.append(time_score)
+    time_weight_back.append(time_score)
+
+time_weight_go = torch.tensor(time_weight_go, dtype=torch.float32)
+time_weight_back = torch.tensor(time_weight_back, dtype=torch.float32)
+
+# 검증: 반감기에서의 값 확인
+half_life_score = math.exp(-lambda_decay * half_life)
+
+print(f"\nTime Edge Score 통계:")
+print(f"  time_weight_go  : min={time_weight_go.min():.4f}, max={time_weight_go.max():.4f}, mean={time_weight_go.mean():.4f}, std={time_weight_go.std():.4f}")
+print(f"  time_weight_back: min={time_weight_back.min():.4f}, max={time_weight_back.max():.4f}, mean={time_weight_back.mean():.4f}, std={time_weight_back.std():.4f}")
+print(f"  반감기 검증: t=half_life일 때 score = {half_life_score:.4f}")
+
+# 검증: 모든 값이 0~1 사이인지 확인
+assert time_weight_go.min() >= 0 and time_weight_go.max() <= 1
+assert time_weight_back.min() >= 0 and time_weight_back.max() <= 1
+# ============== Time Edge Score 추가 끝 ================
+
+
 
 
 
@@ -214,7 +278,7 @@ assert pop_weight_back.min() >= 0 and pop_weight_back.max() <= 1
 device = torch.device("cpu") if GPU_ID == -1 else torch.device(f"cuda:{GPU_ID}" if torch.cuda.is_available() else "cpu")
 graph = graph.to(device)
 
-model = DiffHeadGATRating(
+model = DiffHeadGAT(
 
     num_user_nodes=num_type1_nodes,
     num_location_nodes=num_type2_nodes,
@@ -236,7 +300,11 @@ model = DiffHeadGATRating(
 
     # ==== 정보주입 CUSTOM 인자 (PoPConv)  ===
     pop_weight_go = pop_weight_go,
-    pop_weight_back = pop_weight_back
+    pop_weight_back = pop_weight_back,
+
+    # ==== 정보주입 CUSTOM 인자 (TimeConv)  ===
+    time_weight_go = time_weight_go,
+    time_weight_back = time_weight_back,
 
 ).to(device)
 

@@ -18,6 +18,9 @@ class TimeEncodingGATConv(GATConv):
                  uid2ts: dict,
                  device: str,
 
+                 time_weight_go: torch.Tensor,
+                 time_weight_back: torch.Tensor,
+
                  activation=None,
                  allow_zero_in_degree: bool = False,
                  bias: bool = True):
@@ -35,9 +38,13 @@ class TimeEncodingGATConv(GATConv):
             bias=bias,
         )
 
+        self.time_weight_go = time_weight_go
+        self.time_weight_back = time_weight_back
+
         # 인코딩 차원은, Feature에 더해줘야 하므로 맞춥니다
         self.encoding_dim = in_feats
-
+        self.out_feats = out_feats
+        
         # 유저 수 및 영화 수수
         self.num_users = num_users
         self.num_items = num_items
@@ -63,20 +70,35 @@ class TimeEncodingGATConv(GATConv):
 
         self.register_buffer('user_ts_stats', stats)
         self.ts_linear = nn.Linear(2, self.encoding_dim)
-         
+        
+        self.res = nn.Linear(2, self.out_feats)
+
     def forward(self, graph, feat, *args, **kwargs):
         # tuple → 개별 텐서
         h_type1, h_type2 = feat
         
+        my_res, edge_weight = None, None
+
         ts_emb = self.ts_linear(self.user_ts_stats)
 
         if h_type1.shape[0] == self.num_users and h_type2.shape[0] == self.num_items:
             h_type1 = h_type1 + ts_emb
+            my_res = None
+            edge_weight = self.time_weight_go
         else:
             h_type2 = h_type2 + ts_emb
+            my_res = self.res(self.user_ts_stats)
+            edge_weight = self.time_weight_back
          
-        # 새 tuple 로 묶어 넘기기
-        return super().forward(graph, (h_type1, h_type2), *args, **kwargs)
+
+        return super().forward(
+            graph,
+            (h_type1, h_type2),
+            edge_weight = edge_weight,
+            my_res=my_res,  
+            *args,
+            **kwargs
+        )
 
 
         

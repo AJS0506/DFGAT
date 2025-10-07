@@ -14,3 +14,17 @@ for dataset in 0 1 2 3 4; do
     done
     echo "=============== 데이터셋 $dataset 전체 완료 ==============="
 done
+
+python3 -u baseline_train.py --gpu 0 --dataset 1 --seed 1004 --emb-dim 96 --model GAT > seed1004_GAT.txt &
+python3 -u baseline_train.py --gpu 1 --dataset 1 --seed 1005 --emb-dim 96 --model GAT > seed1005_GAT.txt &
+python3 -u baseline_train.py --gpu 2 --dataset 1 --seed 1006 --emb-dim 96 --model GAT > seed1006_GAT.txt &
+python3 -u baseline_train.py --gpu 3 --dataset 1 --seed 1007 --emb-dim 96 --model GAT > seed1007_GAT.txt &
+python3 -u baseline_train.py --gpu -1 --dataset 1 --seed 1008 --emb-dim 96 --model GAT > seed1008_GAT.txt &
+
+python3 -u baseline_train.py --gpu 1 --dataset 1 --seed 1004 --model AGNN > seed1004_AGNN.txt &
+python3 -u baseline_train.py --gpu 1 --dataset 1 --seed 1005 --model AGNN > seed1005_AGNN.txt &
+python3 -u baseline_train.py --gpu 2 --dataset 1 --seed 1006 --model AGNN > seed1006_AGNN.txt &
+python3 -u baseline_train.py --gpu 3 --dataset 1 --seed 1007 --model AGNN > seed1007_AGNN.txt &
+python3 -u baseline_train.py --gpu 3 --dataset 1 --seed 1008 --model AGNN > seed1008_AGNN.txt &
+
+pkill -f baseline_train.py

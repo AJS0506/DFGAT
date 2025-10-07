@@ -12,6 +12,7 @@ from Model.GCN import TwoLayerSimpleHeteroGCN
 from Model.GAT import TwoLayerSimpleHeteroGAT
 from Model.GraphSAGE import TwoLayerSimpleHeteroSAGE
 from Model.GINC import TwoLayerSimpleHeteroGINC
+from Model.Cheb import TwoLayerSimpleHeteroAGNNConv
 
 from GraphMaker.make_graph import GraphMaker
 from DataLoader.load_dataset import DataLoader
@@ -79,7 +80,8 @@ models = {
     "GCN" : TwoLayerSimpleHeteroGCN(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device),
     "GAT" : TwoLayerSimpleHeteroGAT(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device),
     "SAGE" : TwoLayerSimpleHeteroSAGE(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device),
-    "GINC" : TwoLayerSimpleHeteroGINC(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device)
+    "GINC" : TwoLayerSimpleHeteroGINC(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device),
+    "AGNN" : TwoLayerSimpleHeteroAGNNConv(num_type1_nodes, num_type2_nodes, embedding_dim, first_layer_dim, second_layer_dim, DATA_SET).to(device),
 }
 
 if SELECTED_MODEL not in models:
